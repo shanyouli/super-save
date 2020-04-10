@@ -28,8 +28,10 @@
 ;;; Commentary:
 ;;
 ;; super-save saves buffers when they lose focus.
+;; @see https://emacs-china.org/t/topic/7687
 ;;
 ;;; Code:
+
 (defgroup super-save nil
   "Smart-saving of buffers."
   :group 'tools
@@ -71,11 +73,29 @@ See `super-save-auto-save-when-idle'."
   :type 'boolean
   :package-version '(super-save . "0.3.0"))
 
+(defcustom super-save-all-files t
+  "Save all buffer when t, ignore them otherwise."
+  :group 'super-save
+  :type 'boolean
+  :package-version '(super-save . "0.3.0"))
+
 (defcustom super-save-exclude nil
     "A list of regexps for buffer-file-name excluded from super-save.
 When a buffer-file-name matches any of the regexps it is ignored."
   :group 'super-save
   :type '(repeat (choice regexp))
+  :package-version '(super-save . "0.4.0"))
+
+(defcustom super-save-silent-p t
+  "Not prompted to save information when t, ignore them otherwise,"
+  :group 'super-save
+  :type 'boolean
+  :package-version '(super-save . "0.4.0"))
+
+(defcustom super-save-all-buffer-p t
+  "Save all buffer before exiting emacs when t, ignore theme otherwise,"
+  :group 'super-save
+  :type 'boolean
   :package-version '(super-save . "0.4.0"))
 
 (defun super-save-include-p (filename)
@@ -91,12 +111,26 @@ When a buffer-file-name matches any of the regexps it is ignored."
 
 (defun super-save-command ()
   "Save the current buffer if needed."
-  (when (and buffer-file-name
-             (buffer-modified-p (current-buffer))
-             (file-writable-p buffer-file-name)
-             (if (file-remote-p buffer-file-name) super-save-remote-files t)
-             (super-save-include-p buffer-file-name))
-    (save-buffer)))
+  (let ((buffer-to-save (if super-save-all-files
+                            (buffer-list)
+                          (list (current-buffer)))))
+    (dolist (buf buffer-to-save)
+      (set-buffer buf)
+      (when (and buffer-file-name
+                 (buffer-modified-p (current-buffer))
+                 (file-writable-p buffer-file-name)
+                 (if (file-remote-p buffer-file-name) super-save-remote-files t)
+                 (super-save-include-p buffer-file-name)
+                 (or (not (boundp 'yas--active-snippets)) ; Yassnippet is not active?
+                     (not yas--active-snippets))
+                 (or (not (boundp 'company-candidates)) ; Company is not active?
+                     (not company-candidates)))
+        (if super-save-silent-p
+            (with-temp-message
+                (with-current-buffer " *Minibuf-0*" (buffer-string))
+              (let ((inhibit-message t))
+                (save-buffer)))
+          (save-buffer))))))
 
 (defvar super-save-idle-timer)
 
@@ -132,14 +166,28 @@ When a buffer-file-name matches any of the regexps it is ignored."
   (super-save-advise-trigger-commands)
   (super-save-initialize-idle-timer)
   (dolist (hook super-save-hook-triggers)
-    (add-hook hook #'super-save-command)))
+    (add-hook hook #'super-save-command))
+  (when super-save-all-buffer-p
+    (advice-add 'save-buffers-kill-emacs :before #'super-save-all-buffer-a)))
 
 (defun super-save-stop ()
   "Cleanup super-save's advices and hooks."
   (super-save-remove-advice-from-trigger-commands)
   (super-save-stop-idle-timer)
   (dolist (hook super-save-hook-triggers)
-    (remove-hook hook #'super-save-command)))
+    (remove-hook hook #'super-save-command))
+  (when super-save-all-buffer-p
+    (advice-remove 'save-buffers-kill-emacs #'super-save-all-buffer-a)))
+
+;;;###autoload
+(defun super-save-all-buffer ()
+  (interactive)
+  (let ((super-save-all-files t)
+        (super-save-silent-p t))
+    (super-save-command)))
+
+(defun super-save-all-buffer-a (&rest _)
+  (super-save-all-buffer))
 
 ;;;###autoload
 (define-minor-mode super-save-mode
@@ -148,9 +196,9 @@ When a buffer-file-name matches any of the regexps it is ignored."
   :keymap super-save-mode-map
   :group 'super-save
   :global t
-  (cond
-   (super-save-mode (super-save-initialize))
-   (t (super-save-stop))))
+  (if super-save-mode
+      (super-save-initialize)
+    (super-save-stop)))
 
 (provide 'super-save)
 ;;; super-save.el ends here
